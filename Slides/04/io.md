@@ -2,22 +2,11 @@
 
 * Niekontrolowane efekty uboczne (C, Lisp, ML) - nie nadaje się do użycia w języku leniwym
 
-* strumienie (Landin, Henderson)- program jest funkcją String → String
-- głównie dla języków leniwych
+* Strumienie (Landin, Henderson)- program jest funkcją String → String
 
-* strumienie synchronizowane (dialogue I/O)
+* Strumienie synchronizowane (dialogue I/O)
 
-    system operacyjny możemy traktowac jako funkcję
-
-    ~~~~
-	[Request] -> [Response]
-    ~~~~
-
-    a program 
-
-    ~~~~
-	[Response] -> [Request]
-    ~~~~
+* Monady
 
 # Niekontrolowane efekty uboczne
 
@@ -56,7 +45,7 @@ main = printStr "Hello\n" `seq` return ()
 -- *Bad2> 
 ~~~~
 
-# Trzeba wymuszac ewaluacje
+# Trzeba wymuszać ewaluacje
 
 ~~~~
 iprint = case iputchar 'a' of -- wymuszenie ewaluacji
@@ -75,16 +64,40 @@ iprint = case iputchar 'a' of -- wymuszenie ewaluacji
 Wykonanie tego ćwiczenia powinno wyjaśnić czemu niekontrolowane efekty
 uboczne są nierealne w języku leniwym...
 
+# Impure.hs
+
+Impure trochę oszukuje:
+
+~~~~ {.haskell}
+{-# OPTIONS_GHC -fno-cse -fno-full-laziness #-} 
+module Impure where
+import System.IO.Unsafe
+import System.IO
+
+{-# NOINLINE igetchar #-}
+igetchar :: () -> Char
+igetchar () = unsafePerformIO $ do
+  b <- isEOF
+  if b then return '\0'  else getChar
+
+
+{-# NOINLINE iputchar #-}
+iputchar :: Char -> ()
+iputchar c = unsafePerformIO (putChar c >> hFlush stdout)
+~~~~
+
 # Dygresja - FFI
+
+Ale możemy też naprawdę użyć funkcji z C:
+
 ~~~~ {.haskell}
 {-# LANGUAGE ForeignFunctionInterface #-}
 module CIO(ugetchar,uputchar) where
-import Foreign.C -- get the C types
-import System.IO.Unsafe 
 
 foreign import ccall "stdio.h getchar" cgetchar :: Int -> Char
 foreign import ccall "stdio.h putchar" cputchar  :: Char -> ()
 foreign import ccall "eof.h eof_stdin" ceof :: Int -> Int
+foreign import ccall "eof.h flush_stdout" cflush :: Int -> ()
 
 {-# NOINLINE ugetchar #-}
 ugetchar :: () -> Char
@@ -92,7 +105,33 @@ ugetchar () = case ceof 0 of
          0 -> cgetchar 0
          _ -> '\0'
 
-uputchar = cputchar
+{-# NOINLINE uputchar #-}
+uputchar :: Char -> ()
+uputchar c = case cputchar c of
+         () -> cflush 0
+~~~~
+
+# Strumienie
+
+Program w języku leniwym możemy traktować jako transformator strumieni
+
+~~~~ {.haskell}
+mainS :: [Char] -> [Char]
+~~~~
+
+strumień jest leniwą lista znaków
+
+Ale co jeśli chcemy operować na czymś więcej niż stdin/stdout?
+system operacyjny możemy traktowac jako funkcję
+
+~~~~ {.haskell}
+    [Request] -> [Response]
+~~~~
+
+a program 
+
+~~~~{.haskell}
+    [Response] -> [Request]
 ~~~~
 
 # Dialogowe IO
@@ -139,6 +178,7 @@ cat ~(Success : ~((Str userInput) : ~(Success : ~(r4 : _))))
 * Trzeba dbać o kolejność wyliczania
 * Problematyczna modularność (jak zbudować dialog z mniejszych dialogów?)
 
+
 # Dialogowe I/O - ćwiczenia
 
 Moduł Code/Dialogue2.hs implementuje dialogowe IO. Używając go
@@ -150,6 +190,27 @@ Do uruchomienia dialogu służy funkcja `runDialogue :: Dialogue a -> IO a`
 
 (opcjonalnie) Zaimplementuj dialogowe I/O za pomocą z funkcji z modułu Impure, ewentualnie dopisując dodatkowe "nieczyste" funkcje.
 
+# Dialogowe I/O - obsługa błędów
+
+~~~~ {.haskell}
+cat3 :: Dialogue
+cat3 ~(r1 : ~(r2 : ~(r3 : ~(r4 : _))))
+ = AppendChan stdout "enter filename\n" : case r1 of
+     Success -> ReadChan stdin : case r2 of 
+            (Str userInput) -> case lines userInput of
+              [] -> error "Empty input"
+              (name:_) -> [
+               AppendChan stdout name,
+               ReadFile name,
+               AppendChan stdout
+                (case r4 of
+	    	   Str contents -> contents
+		   Failure ioerr -> "can’t open file")
+               ]
+            e2 -> error(show e2)
+     e1 -> error (show e1)
+  where error s = [AppendChan stderr (s++"\n")]
+~~~~
 
 # Kontynuacyjne I/O
 
